@@ -298,7 +298,6 @@ async def chart_ml(task_id: str, theme: str = Query("light")):
     logger = logging.getLogger("ml_chart") # 로거 생성
     try:
         plt.close("all") # 모든 기존 Figure 닫기
-        # setup_korean_font()  한글 폰트 설정
 
         ml_results = None # ML 결과 초기화
         try:
