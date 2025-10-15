@@ -188,6 +188,7 @@ async def run_analysis_task(task_id: str, request: AnalysisRequest):
             "backtest_results": ml_results.get('backtest', {}) if ml_results else {}  # 백테스팅 결과 추가
         }
         
+        # 분석 완료 후 최종 결과 저장
         analysis_tasks[task_id]["status"] = "completed"
         analysis_tasks[task_id]["message"] = f"분석 완료 ({len(successful_stocks)}개 종목)"
         analysis_tasks[task_id]["progress"] = 1.0
@@ -200,7 +201,7 @@ async def run_analysis_task(task_id: str, request: AnalysisRequest):
         traceback.print_exc()
     
     finally:
-        # 💡 [최적화 4] 작업 성공/실패 여부와 관계없이 메모리 정리를 시도
-        if 'analyzer' in analysis_tasks[task_id].get("result", {}):
-            del analysis_tasks[task_id]["result"]["analyzer"] # 가장 큰 객체 삭제
-        gc.collect() # 가비지 컬렉션 실행
+        # ✅ 2. 작업이 끝나면 메모리 정리를 강제로 실행
+        if 'analyzer' in locals():
+            del analyzer  # analyzer 객체 삭제
+        gc.collect()
