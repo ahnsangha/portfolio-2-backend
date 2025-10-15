@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-BASE_DIR = Path(__file__).resolve().parent.parent.parent # stock-backend/
+BASE_DIR = Path(__file__).resolve().parent.parent # stock-backend/
 
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
