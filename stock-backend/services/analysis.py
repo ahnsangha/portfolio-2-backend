@@ -21,6 +21,7 @@ from services.ml import MLAnalyzer # ML 분석 모듈
 
 from utils.stats import rolling_corr_with_ci
 from services.factors import neutralize_to_factors, build_factor_matrix
+from typing import List, Optional, Tuple, Callable
 
 # 백테스팅 모듈 임포트
 try:
@@ -100,7 +101,9 @@ class KoreanStockCorrelationAnalysis:
         self,
         start_date: str = '2023-01-01',
         end_date: str = '2024-12-31',
-        tickers: Optional[List[str]] = None
+        tickers: Optional[List[str]] = None,
+        # 진행 상황 보고를 위한 콜백 함수 인자 추가
+        progress_callback: Optional[Callable[[int, int, str], None]] = None
     ) -> Tuple[bool, List[dict]]:
         # 데이터 수집 메서드
         if not tickers: # 티커가 없으면 기본값 사용
@@ -112,11 +115,16 @@ class KoreanStockCorrelationAnalysis:
 
         stock_data = {} # 수집된 데이터 저장
         collection_status: List[dict] = [] # 수집 상태 기록
+        total_tickers = len(tickers) # 전체 종목 수
 
-        for ticker in tickers:  # 각 종목별로 데이터 수집
+        for i, ticker in enumerate(tickers):  # 각 종목별로 데이터 수집
             try:
                 name = stock_info_map.get(ticker, ticker) # 종목 이름
                 print(f"Collecting {name} ({ticker})...") # 진행 상황 출력
+
+                # 콜백 함수 호출하여 진행 상황 업데이트
+                if progress_callback:
+                    progress_callback(i + 1, total_tickers, name)
 
                 collected = False # 수집 성공 플래그
                 # FDR로 먼저 시도

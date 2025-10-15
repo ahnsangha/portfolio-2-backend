@@ -21,13 +21,21 @@ async def run_analysis_task(task_id: str, request: AnalysisRequest):
         
         loop = asyncio.get_event_loop()
         
-        # 1. 데이터 수집
+        # 데이터 수집 진행 상황을 업데이트하는 콜백 함수 정의
+        def progress_callback(current, total, stock_name):
+            progress = 0.1 + (current / total) * 0.2 # 데이터 수집 진행률 (10% ~ 30%)
+            analysis_tasks[task_id]["progress"] = round(progress, 2)
+            analysis_tasks[task_id]["message"] = f"데이터 수집 중... ({current}/{total})"
+            analysis_tasks[task_id]["current_stock"] = stock_name
+        
+        # 1. 데이터 수집 (콜백 함수 전달)
         success, collection_status = await loop.run_in_executor(
             executor,
             analyzer.collect_data,
             request.start_date,
             request.end_date,
-            request.tickers
+            request.tickers,
+            progress_callback  # 콜백 함수 전달
         )
         
         if not success:
@@ -43,9 +51,10 @@ async def run_analysis_task(task_id: str, request: AnalysisRequest):
             analysis_tasks[task_id]["collection_status"] = collection_status
             return
         
-        # 2. 상관관계 분석
+         # 2. 상관관계 분석
         analysis_tasks[task_id]["progress"] = 0.3
         analysis_tasks[task_id]["message"] = f"상관관계 분석 중... ({len(successful_stocks)}개 종목)"
+        analysis_tasks[task_id].pop("current_stock", None) # current_stock 필드 제거
         
         await loop.run_in_executor(executor, analyzer.analyze_correlation, request.window)
         

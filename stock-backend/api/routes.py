@@ -417,6 +417,23 @@ async def data_fx_corr_60d(task_id: str):
     analyzer = _require_ready(task_id) # analyzer 객체 가져오기
     return create_fx_corr_60d_data(analyzer) # 데이터 생성
 
+# 분석 상태를 확인하는 엔드포인트
+@router.get("/analysis/status/{task_id}")
+async def get_analysis_status(task_id: str) -> AnalysisStatus:
+    # 작업 ID가 존재하지 않으면 404 에러 발생
+    if task_id not in analysis_tasks:
+        raise HTTPException(status_code=404, detail="Task not found")
+    # 해당 작업의 상태 정보 반환
+    task = analysis_tasks[task_id]
+    return AnalysisStatus(
+        task_id=task_id,
+        status=task["status"],
+        message=task["message"],
+        progress=task["progress"],
+        # 현재 처리 중인 종목 정보 추가
+        current_stock=task.get("current_stock", "")
+    )
+
 # 입력된 조건으로 포트폴리오 비중을 계산하는 엔드포인트
 @router.post("/advisor/mix")
 def advisor_mix(payload: dict = Body(...)):
