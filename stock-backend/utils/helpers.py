@@ -16,6 +16,8 @@ import io, base64
 import matplotlib.ticker as mtick
 from matplotlib.ticker import MaxNLocator, FuncFormatter
 from matplotlib.colors import to_rgba
+import matplotlib.font_manager as fm
+from pathlib import Path
 
 matplotlib.use("Agg")
 
@@ -81,21 +83,35 @@ def set_plot_theme(theme: str = "light") -> None:
 
 # 폰트 
 def setup_korean_font():
-    plt.rcParams.update(plt.rcParamsDefault)
     system = platform.system()
+    
+    # Windows, macOS는 기존 로직 유지 (로컬 개발 환경용)
     if system == "Windows":
         plt.rcParams["font.family"] = "Malgun Gothic"
     elif system == "Darwin":
-        for f in ["AppleGothic", "Apple SD Gothic Neo", "Arial Unicode MS", "Helvetica"]:
-            try:
-                plt.rcParams["font.family"] = f
-                return f
-            except Exception:
-                continue
+        plt.rcParams["font.family"] = "AppleGothic"
+    # Linux (Render 서버 환경) 처리
     else:
-        plt.rcParams["font.family"] = "NanumGothic"
+        # 프로젝트 내 폰트 파일 경로를 지정합니다.
+        font_path = Path(__file__).resolve().parent.parent / 'fonts' / 'NanumGothicBold.ttf'
+        
+        if font_path.exists():
+            # matplotlib의 폰트 매니저에 폰트 파일 추가
+            fm.fontManager.addfont(font_path)
+            # 폰트 이름으로 설정
+            plt.rcParams['font.family'] = 'NanumGothic'
+        else:
+            # 혹시 파일이 없으면 기존 방식 시도 (오류 발생 가능)
+            plt.rcParams["font.family"] = "NanumGothic"
+
     plt.rcParams["axes.unicode_minus"] = False
-    return plt.rcParams["font.family"]
+    
+    # 폰트 설정을 즉시 적용
+    try:
+        fm._load_fontmanager(try_read_cache=False)
+    except Exception:
+        pass
+
 
 setup_korean_font()
 
