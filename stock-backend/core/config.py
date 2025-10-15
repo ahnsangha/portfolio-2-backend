@@ -10,6 +10,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent # stock-backend/
 
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
+# 허용할 출처(Origin) 목록
 origins = [
     "http://localhost:5173",  # 로컬 개발 환경 주소
     "https://portfolio-2-frontend-mu.vercel.app",  # Vercel 배포 주소
