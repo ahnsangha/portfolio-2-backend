@@ -26,7 +26,7 @@ from utils.charts import (
 from core.json_safe import SafeJSONResponse
 # ML 차트 및 헬퍼 함수 임포트
 from utils.ml_charts import create_ml_chart
-from utils.helpers import fig_to_base64, setup_korean_font, get_theme_colors, get_ml_theme_colors
+from utils.helpers import fig_to_base64, get_theme_colors, get_ml_theme_colors
 # core 모듈에서 executor 임포트
 from core.state import executor
 # models 모듈에서 데이터 모델 임포트
@@ -42,6 +42,9 @@ from services.data import stock_manager
 from services.backtest import walk_forward_backtest
 from services.portfolio import portfolio_construct
 from services.factors import neutralize_to_factors, build_factor_matrix
+
+from utils.helpers import fig_to_base64, setup_korean_font, get_theme_colors, get_ml_theme_colors 
+
 # APIRouter 인스턴스 생성
 router = APIRouter()
 
@@ -295,7 +298,7 @@ async def chart_ml(task_id: str, theme: str = Query("light")):
     logger = logging.getLogger("ml_chart") # 로거 생성
     try:
         plt.close("all") # 모든 기존 Figure 닫기
-        setup_korean_font() # 한글 폰트 설정
+        # setup_korean_font()  한글 폰트 설정
 
         ml_results = None # ML 결과 초기화
         try:

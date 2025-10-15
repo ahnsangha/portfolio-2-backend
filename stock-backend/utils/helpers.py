@@ -82,46 +82,100 @@ def set_plot_theme(theme: str = "light") -> None:
     CAPTION_OUTSIDE["color"] = CAPTION_TEXT_COLOR
 
 
-# 폰트 설정 함수
+# 설정이 이미 완료되었는지 확인하기 위한 플래그
+_korean_font_setup_done = False
+
 def setup_korean_font():
-    # 폰트가 이미 설정되었는지 확인
-    if 'NanumGothic' in plt.rcParams['font.family']:
-        print("Korean font 'NanumGothic' is already set up.")
+    """
+    백엔드에 포함된 나눔고딕 폰트를 Matplotlib에 전역으로 설정합니다.
+    애플리케이션 시작 시 한 번만 실행되도록 설계되었습니다.
+    """
+    global _korean_font_setup_done
+    if _korean_font_setup_done:
         return
 
-    # 폰트 경로 설정 (현재 파일 위치 기준)
-    font_dir = os.path.join(os.path.dirname(__file__), '..', 'fonts')
+    print("--- initializing korean font setup ---")
     
-    # 폰트 파일 경로 리스트
-    font_paths = [os.path.join(font_dir, f) for f in os.listdir(font_dir) if f.endswith('.ttf')]
-
-    if not font_paths:
-        print("Font files not found in the backend/fonts directory.")
-        # 기본 폰트 설정 (오류 방지)
-        plt.rcParams['font.family'] = 'sans-serif'
-        plt.rcParams['axes.unicode_minus'] = False
-        return
-
-    # Matplotlib의 폰트 매니저에 폰트 경로 추가
-    for font_path in font_paths:
-        if os.path.exists(font_path):
-            fm.fontManager.addfont(font_path)
-    
-    # Matplotlib 설정 업데이트
     try:
-        # 폰트 캐시를 다시 빌드할 필요 없이 바로 사용
+        # 1. 폰트 파일이 있는 디렉터리 경로를 확인합니다.
+        font_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'fonts'))
+        print(f"searching for fonts in: {font_dir}")
+
+        if not os.path.isdir(font_dir):
+            print(f"error: font directory not found at {font_dir}")
+            _korean_font_setup_done = True
+            return
+
+        # 2. 해당 디렉터리에서 .ttf 폰트 파일을 찾습니다.
+        font_files = [os.path.join(font_dir, f) for f in os.listdir(font_dir) if f.lower().endswith('.ttf')]
+        
+        if not font_files:
+            print(f"error: no .ttf font files found in {font_dir}")
+            _korean_font_setup_done = True
+            return
+
+        print(f"found {len(font_files)} font file(s): {[os.path.basename(f) for f in font_files]}")
+
+        # 3. 찾은 폰트들을 Matplotlib에 추가합니다.
+        for font_path in font_files:
+            fm.fontManager.addfont(font_path)
+        
+        # 4. Matplotlib의 기본 설정을 'NanumGothic'으로 변경합니다.
         matplotlib.rc('font', family='NanumGothic')
-        plt.rcParams['axes.unicode_minus'] = False
-        print("Successfully set up Korean font 'NanumGothic'.")
+        plt.rcParams['axes.unicode_minus'] = False # 마이너스 기호 깨짐 방지
+        
+        # 5. 설정이 잘 되었는지 최종 확인합니다.
+        font_check = fm.findfont('NanumGothic', fallback_to_default=False)
+        print(f"verification: 'NanumGothic' resolved to: {font_check}")
+        print("--- korean font setup completed successfully ---")
+
     except Exception as e:
-        print(f"Failed to set Korean font: {e}")
-        # 실패 시 기본값으로 복귀
-        plt.rcParams['font.family'] = 'sans-serif'
-        plt.rcParams['axes.unicode_minus'] = False
+        # 폰트를 찾지 못하면 여기서 오류가 발생합니다.
+        print(f"--- error during font setup: {e} ---")
+        print("falling back to default sans-serif font.")
+        matplotlib.rc('font', family='sans-serif')
+    
+    finally:
+        _korean_font_setup_done = True
 
 
+def fig_to_base64(fig, **kwargs):
+    buf = BytesIO()
+    fig.savefig(buf, format="png", dpi=150, **kwargs)
+    buf.seek(0)
+    return base64.b64encode(buf.getvalue()).decode()
 
-setup_korean_font()
+def get_theme_colors(theme: str = "light"):
+    if (theme or "light").lower().startswith("dark"):
+        return {
+            "figure_facecolor": "#1E293B",
+            "axes_facecolor": "#334155",
+            "text_color": "#F1F5F9",
+            "grid_color": "#475569",
+            "spine_color": "#94A3B8",
+            "tick_color": "#CBD5E1",
+        }
+    return {
+        "figure_facecolor": "white",
+        "axes_facecolor": "#F8FAFC",
+        "text_color": "black",
+        "grid_color": "#E2E8F0",
+        "spine_color": "#94A3B8",
+        "tick_color": "#64748B",
+    }
+
+def get_ml_theme_colors(theme: str = "light"):
+    if (theme or "light").lower().startswith("dark"):
+        return {
+            "figure_facecolor": "#161b22",
+            "axes_facecolor": "#0d1117",
+            "text_color": "#c9d1d9",
+            "grid_color": "#21262d",
+            "spine_color": "#30363d",
+            "tick_color": "#8b949e",
+        }
+    return get_theme_colors(theme)
+
 
 # 날짜축 포맷 
 def format_date_axis(ax, interval_months: int | None = None, max_ticks: int = 8):

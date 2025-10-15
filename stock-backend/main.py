@@ -5,6 +5,10 @@ from fastapi import FastAPI
 from core.config import configure_app
 from api.routes import router as api_router
 from core.json_safe import SafeJSONResponse
+from utils.helpers import setup_korean_font
+
+# 애플리케이션 시작 시 한글 폰트를 전역으로 설정
+setup_korean_font()
 
 app = FastAPI(
     title="Korean Stock Correlation Analysis",
