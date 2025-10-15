@@ -200,7 +200,7 @@ class KoreanStockCorrelationAnalysis:
                             "name": name,
                             "status": "failed",
                             "days": 0,
-                            "error": "Could not fetch data from any source"
+                            "error": "데이터 소스에서 정보를 가져올 수 없습니다."
                         })
 
             except Exception as e:
