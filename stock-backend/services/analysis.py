@@ -592,13 +592,16 @@ class KoreanStockCorrelationAnalysis:
     def run_ml_analysis_with_backtest(self, k_clusters=4, horizon=5, use_gru=True,
                                       top_n=5, bottom_n=5, run_backtest=True,
                                       backtest_top_k=5, backtest_bottom_k=5, 
-                                      backtest_cost_bps=10.0, **kwargs):
+                                      backtest_cost_bps=10.0, 
+                                      progress_callback: Optional[Callable] = None, 
+                                      **kwargs):
         ml_results = self.run_ml_analysis( # ML 분석 실행
             k_clusters=k_clusters,
             horizon=horizon,
             use_gru=use_gru,
             top_n=top_n,
             bottom_n=bottom_n,
+            progress_callback=progress_callback,
             **kwargs
         )
         
