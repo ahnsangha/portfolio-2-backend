@@ -154,6 +154,7 @@ def get_theme_colors(theme: str = "light"):
             "grid_color": "#475569",
             "spine_color": "#94A3B8",
             "tick_color": "#CBD5E1",
+            "legend_facecolor": "#334155",
         }
     return {
         "figure_facecolor": "white",
@@ -162,6 +163,7 @@ def get_theme_colors(theme: str = "light"):
         "grid_color": "#E2E8F0",
         "spine_color": "#94A3B8",
         "tick_color": "#64748B",
+        "legend_facecolor": "#F8FAFC",
     }
 
 def get_ml_theme_colors(theme: str = "light"):
