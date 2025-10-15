@@ -23,19 +23,19 @@ from scipy.spatial.distance import squareform # 거리행렬 변환
 
 logger = logging.getLogger(__name__) # 로거 인스턴스
 
-# 토치 사용 가능하면 GRU 사용 안된다면 폴백  
+# 💡 [최적화 1] TORCH_AVAILABLE 플래그를 사용하여 torch를 조건부로 import 합니다.
+TORCH_AVAILABLE = False
 try:
-    import torch # 파이토치 메인
-    import torch.nn as nn # 신경망 모듈
-    from torch.utils.data import DataLoader, Dataset # 데이터 로더
-    TORCH_AVAILABLE = True # 토치 사용 가능 플래그
-except Exception as e:
-    logger.debug("Torch not available: %s", e) # 토치 없을 때 디버그 로그
-    torch = None # 토치 None으로 설정
-    nn = None # nn None으로 설정
-    DataLoader = None # DataLoader None으로 설정
-    Dataset = None # Dataset None으로 설정
-    TORCH_AVAILABLE = False # 토치 사용 불가 플래그
+    import torch
+    import torch.nn as nn
+    from torch.utils.data import DataLoader, Dataset
+    TORCH_AVAILABLE = True
+except ImportError:
+    logger.debug("Torch not available, GRU model disabled.")
+    torch = None
+    nn = None
+    DataLoader = None
+    Dataset = None
 
 # 결과 전달용 컨테이너 
 @dataclass

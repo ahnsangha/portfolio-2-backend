@@ -8,6 +8,7 @@ from services.analysis import KoreanStockCorrelationAnalysis
 from services.data import stock_manager
 from models import AnalysisRequest
 import numpy as np
+import gc # 💡 [최적화 4] 가비지 컬렉션 모듈 import
 
 # 백그라운드 분석 작업
 async def run_analysis_task(task_id: str, request: AnalysisRequest):
@@ -197,3 +198,9 @@ async def run_analysis_task(task_id: str, request: AnalysisRequest):
         analysis_tasks[task_id]["progress"] = 0
         print(f"Analysis error: {str(e)}")
         traceback.print_exc()
+    
+    finally:
+        # 💡 [최적화 4] 작업 성공/실패 여부와 관계없이 메모리 정리를 시도
+        if 'analyzer' in analysis_tasks[task_id].get("result", {}):
+            del analysis_tasks[task_id]["result"]["analyzer"] # 가장 큰 객체 삭제
+        gc.collect() # 가비지 컬렉션 실행

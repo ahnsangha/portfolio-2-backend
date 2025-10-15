@@ -249,10 +249,11 @@ class KoreanStockCorrelationAnalysis:
             self.market_data = pd.Series(dtype=float) # 빈 시리즈
 
         if stock_data: # 수집된 데이터가 있으면
-            self.stock_data = pd.DataFrame(stock_data) # 데이터프레임으로 변환
+            # 💡 [최적화 3] 데이터 타입을 float32로 변경하여 메모리 사용량 절감
+            self.stock_data = pd.DataFrame(stock_data).astype('float32')
             thresh_val = int(max(1, np.floor(len(self.stock_data.columns) * 0.5))) # 임계값 계산
             self.stock_data = self.stock_data.dropna(thresh=thresh_val) # 결측치 많은 행 제거
-            self.returns = self.stock_data.pct_change().dropna() # 수익률 계산
+            self.returns = self.stock_data.pct_change().dropna().astype('float32') # 수익률 계산, 수익률 계산 시에도 데이터 타입 유지
 
             print(f"Data collection completed: {len(self.stock_data)} days, {len(self.stock_data.columns)} stocks")
             return True, collection_status # 성공 반환
