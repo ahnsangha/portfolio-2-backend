@@ -17,6 +17,7 @@ import matplotlib.ticker as mtick
 from matplotlib.ticker import MaxNLocator, FuncFormatter
 from matplotlib.colors import to_rgba
 import matplotlib.font_manager as fm
+import os
 from pathlib import Path
 
 matplotlib.use("Agg")
@@ -81,36 +82,43 @@ def set_plot_theme(theme: str = "light") -> None:
     CAPTION_OUTSIDE["color"] = CAPTION_TEXT_COLOR
 
 
-# 폰트 
+# 폰트 설정 함수
 def setup_korean_font():
-    system = platform.system()
-    
-    # Windows, macOS는 기존 로직 유지 (로컬 개발 환경용)
-    if system == "Windows":
-        plt.rcParams["font.family"] = "Malgun Gothic"
-    elif system == "Darwin":
-        plt.rcParams["font.family"] = "AppleGothic"
-    # Linux (Render 서버 환경) 처리
-    else:
-        # 프로젝트 내 폰트 파일 경로를 지정합니다.
-        font_path = Path(__file__).resolve().parent.parent / 'fonts' / 'NanumGothicBold.ttf'
-        
-        if font_path.exists():
-            # matplotlib의 폰트 매니저에 폰트 파일 추가
-            fm.fontManager.addfont(font_path)
-            # 폰트 이름으로 설정
-            plt.rcParams['font.family'] = 'NanumGothic'
-        else:
-            # 혹시 파일이 없으면 기존 방식 시도 (오류 발생 가능)
-            plt.rcParams["font.family"] = "NanumGothic"
+    # 폰트가 이미 설정되었는지 확인
+    if 'NanumGothic' in plt.rcParams['font.family']:
+        print("Korean font 'NanumGothic' is already set up.")
+        return
 
-    plt.rcParams["axes.unicode_minus"] = False
+    # 폰트 경로 설정 (현재 파일 위치 기준)
+    font_dir = os.path.join(os.path.dirname(__file__), '..', 'fonts')
     
-    # 폰트 설정을 즉시 적용
+    # 폰트 파일 경로 리스트
+    font_paths = [os.path.join(font_dir, f) for f in os.listdir(font_dir) if f.endswith('.ttf')]
+
+    if not font_paths:
+        print("Font files not found in the backend/fonts directory.")
+        # 기본 폰트 설정 (오류 방지)
+        plt.rcParams['font.family'] = 'sans-serif'
+        plt.rcParams['axes.unicode_minus'] = False
+        return
+
+    # Matplotlib의 폰트 매니저에 폰트 경로 추가
+    for font_path in font_paths:
+        if os.path.exists(font_path):
+            fm.fontManager.addfont(font_path)
+    
+    # Matplotlib 설정 업데이트
     try:
-        fm._load_fontmanager(try_read_cache=False)
-    except Exception:
-        pass
+        # 폰트 캐시를 다시 빌드할 필요 없이 바로 사용
+        matplotlib.rc('font', family='NanumGothic')
+        plt.rcParams['axes.unicode_minus'] = False
+        print("Successfully set up Korean font 'NanumGothic'.")
+    except Exception as e:
+        print(f"Failed to set Korean font: {e}")
+        # 실패 시 기본값으로 복귀
+        plt.rcParams['font.family'] = 'sans-serif'
+        plt.rcParams['axes.unicode_minus'] = False
+
 
 
 setup_korean_font()
