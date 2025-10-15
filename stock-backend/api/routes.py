@@ -81,12 +81,6 @@ def _call_create_ml_chart_compat(func, analyzer, ml_results, **kwargs):
                 continue
         return None # 모든 시도 실패 시 None 반환
 
-# 루트 경로 ("/")에 대한 GET 요청 처리
-@router.get("/")
-async def root(request: Request):
-    # index.html 템플릿을 렌더링하여 반환
-    return templates.TemplateResponse("index.html", {"request": request})
-
 # /stocks, /analysis 엔드포인트들
 # 주식 목록을 조회하는 엔드포인트
 @router.get("/stocks/list")
