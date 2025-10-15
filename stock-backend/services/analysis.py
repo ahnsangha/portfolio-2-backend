@@ -145,6 +145,14 @@ class KoreanStockCorrelationAnalysis:
                         })
                         collected = True # 수집 성공
                         continue
+                    # ✅ 데이터가 너무 짧은 경우, 구체적인 사유를 기록합니다.
+                    elif not df.empty:
+                        collection_status.append({
+                            "ticker": ticker, "name": name, "status": "failed", "days": len(df),
+                            "error": f"데이터 기간이 너무 짧습니다 ({len(df)}일). 최소 50일이 필요합니다."
+                        })
+                        collected = True # 실패했지만 수집 시도는 한 것으로 간주
+                        continue
                 except Exception as fdr_error:
                     print(f"FDR failed for {ticker}: {str(fdr_error)[:50]}") # FDR 실패 로그
 
@@ -175,6 +183,13 @@ class KoreanStockCorrelationAnalysis:
                                     "source": f"yfinance ({test_ticker})"
                                 })
                                 collected = True # 수집 성공
+                                break
+                            elif not df.empty:
+                                collection_status.append({
+                                    "ticker": ticker, "name": name, "status": "failed", "days": len(df),
+                                    "error": f"데이터 기간이 너무 짧습니다 ({len(df)}일). 최소 50일이 필요합니다."
+                                })
+                                collected = True
                                 break
                         except Exception:
                             continue # 다음 형식 시도
