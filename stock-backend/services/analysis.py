@@ -1,3 +1,5 @@
+# services/analysis.py
+
 # 데이터 수집과 상관 분석과 포트폴리오 계산과 ML 파이프라인을 담당
 
 import warnings
@@ -11,7 +13,7 @@ import pandas as pd # 데이터프레임 처리용
 import yfinance as yf # 야후 파이낸스 데이터
 import FinanceDataReader as fdr # 한국 주식 데이터
 
-from typing import List, Optional, Tuple # 타입 힌트용
+from typing import List, Optional, Tuple, Callable # 타입 힌트용 (Callable 포함)
 from sklearn.cluster import KMeans # K-means 클러스터링
 from sklearn.preprocessing import StandardScaler # 데이터 정규화
 
@@ -21,7 +23,6 @@ from services.ml import MLAnalyzer # ML 분석 모듈
 
 from utils.stats import rolling_corr_with_ci
 from services.factors import neutralize_to_factors, build_factor_matrix
-from typing import List, Optional, Tuple, Callable
 
 # 백테스팅 모듈 임포트
 try:
@@ -102,7 +103,6 @@ class KoreanStockCorrelationAnalysis:
         start_date: str = '2023-01-01',
         end_date: str = '2024-12-31',
         tickers: Optional[List[str]] = None,
-        # 진행 상황 보고를 위한 콜백 함수 인자 추가
         progress_callback: Optional[Callable[[int, int, str], None]] = None
     ) -> Tuple[bool, List[dict]]:
         # 데이터 수집 메서드
@@ -115,14 +115,13 @@ class KoreanStockCorrelationAnalysis:
 
         stock_data = {} # 수집된 데이터 저장
         collection_status: List[dict] = [] # 수집 상태 기록
-        total_tickers = len(tickers) # 전체 종목 수
+        total_tickers = len(tickers)
 
         for i, ticker in enumerate(tickers):  # 각 종목별로 데이터 수집
             try:
                 name = stock_info_map.get(ticker, ticker) # 종목 이름
                 print(f"Collecting {name} ({ticker})...") # 진행 상황 출력
 
-                # 콜백 함수 호출하여 진행 상황 업데이트
                 if progress_callback:
                     progress_callback(i + 1, total_tickers, name)
 
@@ -257,11 +256,9 @@ class KoreanStockCorrelationAnalysis:
             self.market_data = pd.Series(dtype=float) # 빈 시리즈
 
         if stock_data: # 수집된 데이터가 있으면
-            # 💡 [최적화 3] 데이터 타입을 float32로 변경하여 메모리 사용량 절감
             self.stock_data = pd.DataFrame(stock_data).astype('float32')
             thresh_val = int(max(1, np.floor(len(self.stock_data.columns) * 0.5))) # 임계값 계산
             self.stock_data = self.stock_data.dropna(thresh=thresh_val) # 결측치 많은 행 제거
-            # 모든 종목의 데이터가 없는 날만 제거하도록 .dropna()를 .dropna(how='all')로 변경
             self.returns = self.stock_data.pct_change().dropna(how='all').astype('float32')
 
             print(f"Data collection completed: {len(self.stock_data)} days, {len(self.stock_data.columns)} stocks")
@@ -272,122 +269,87 @@ class KoreanStockCorrelationAnalysis:
 
     # 상관관계 분석
     def analyze_correlation(self, window: int = 60, progress_callback: Optional[Callable] = None) -> None:
-        if len(self.returns) < window:
+        if len(self.returns) < window: # 데이터가 윈도우보다 짧으면
             print(f"Warning: Not enough data for window size {window}. Using {len(self.returns)} days.")
-            window = max(20, len(self.returns) // 3)
+            window = max(20, len(self.returns) // 3) # 윈도우 크기 조정
 
         if progress_callback: progress_callback(message="정적 상관관계 계산 중...")
-        self.static_corr = self.returns.corr()
+        self.static_corr = self.returns.corr() # 전체 기간 상관관계
         
         if progress_callback: progress_callback(message="롤링 상관관계 계산 중...")
-        self.rolling_corr_matrix = self.returns.rolling(window).corr()
+        self.rolling_corr_matrix = self.returns.rolling(window).corr() # 롤링 상관관계
         
         if progress_callback: progress_callback(message="평균 상관관계 및 변동성 계산 중...")
-        self.avg_corr = self.rolling_corr_matrix.groupby(level=0).apply(
-            lambda x: x.values[np.triu_indices_from(x.values, k=1)].mean()
+        self.avg_corr = self.rolling_corr_matrix.groupby(level=0).apply( # 평균 상관관계
+            lambda x: x.values[np.triu_indices_from(x.values, k=1)].mean() # 상삼각 행렬 평균
         )
-        self.market_volatility = self.returns.mean(axis=1).rolling(20).std() * np.sqrt(252)
+        self.market_volatility = self.returns.mean(axis=1).rolling(20).std() * np.sqrt(252) # 시장 변동성
 
-    # ✅ calculate_portfolio_metrics 메소드 수정
     def calculate_portfolio_metrics(self, progress_callback: Optional[Callable] = None) -> None:
-        if self.returns.empty:
-            self.equal_weight_returns = pd.Series(dtype=float)
+        # 포트폴리오 지표 계산
+        if self.returns.empty: # 데이터 없으면
+            self.equal_weight_returns = pd.Series(dtype=float) # 빈 시리즈
             self.min_var_returns = pd.Series(dtype=float)
             self.max_sharpe_returns = pd.Series(dtype=float)
             return
 
         if progress_callback: progress_callback(message="포트폴리오 가중치 및 수익률 계산 중...")
-        self.equal_weight_returns = self.returns.mean(axis=1)
+        self.equal_weight_returns = self.returns.mean(axis=1) # 동일가중 수익률
 
-        cov_matrix = self.returns.cov()
-        inv_cov = np.linalg.pinv(cov_matrix.values)
-        ones = np.ones(len(cov_matrix))
-        weights = inv_cov @ ones / (ones @ inv_cov @ ones)
-        self.min_var_returns = (self.returns @ weights)
-        self.min_var_weights = dict(zip(self.returns.columns, weights))
+        cov_matrix = self.returns.cov() # 공분산 행렬
+        inv_cov = np.linalg.pinv(cov_matrix.values) # 의사역행렬
+        ones = np.ones(len(cov_matrix)) # 1 벡터
+        weights = inv_cov @ ones / (ones @ inv_cov @ ones) # 최소분산 가중치
+        self.min_var_returns = (self.returns @ weights) # 최소분산 수익률
+        self.min_var_weights = dict(zip(self.returns.columns, weights)) # 가중치 저장
 
-        inv_vol = 1 / self.returns.std()
-        sharpe_weights = inv_vol / inv_vol.sum()
-        self.max_sharpe_returns = (self.returns * sharpe_weights).sum(axis=1)
-        self.max_sharpe_weights = dict(zip(self.returns.columns, sharpe_weights))
+        inv_vol = 1 / self.returns.std() # 변동성의 역수
+        sharpe_weights = inv_vol / inv_vol.sum() # 샤프 가중치
+        self.max_sharpe_returns = (self.returns * sharpe_weights).sum(axis=1) # 최대샤프 수익률
+        self.max_sharpe_weights = dict(zip(self.returns.columns, sharpe_weights))# 가중치 저장
 
-        if hasattr(self, 'avg_corr') and len(self.avg_corr) > 0:
-            dynamic_weights = 1 - self.avg_corr
-            dynamic_weights = dynamic_weights.clip(0.3, 1.0)
-            self.dynamic_returns = self.equal_weight_returns[dynamic_weights.index] * dynamic_weights
+        if hasattr(self, 'avg_corr') and len(self.avg_corr) > 0: # 평균 상관관계 있으면
+            dynamic_weights = 1 - self.avg_corr # 역상관 가중치
+            dynamic_weights = dynamic_weights.clip(0.3, 1.0) # 범위 제한
+            self.dynamic_returns = self.equal_weight_returns[dynamic_weights.index] * dynamic_weights # 동적 수익률
 
-    # ✅ run_ml_analysis_with_backtest 메소드 수정
-    def run_ml_analysis_with_backtest(self, k_clusters=4, horizon=5, use_gru=True,
-                                      top_n=5, bottom_n=5, run_backtest=True,
-                                      backtest_top_k=5, backtest_bottom_k=5, 
-                                      backtest_cost_bps=10.0, 
-                                      progress_callback: Optional[Callable] = None, # 인자 추가
-                                      **kwargs):
-        
-        # ML 분석 실행 시 콜백 전달
-        ml_results = self.run_ml_analysis(
-            k_clusters=k_clusters,
-            horizon=horizon,
-            use_gru=use_gru,
-            top_n=top_n,
-            bottom_n=bottom_n,
-            progress_callback=progress_callback, # 콜백 전달
-            **kwargs
-        )
-        
-        if run_backtest and ml_results:
-            if progress_callback: progress_callback(message="백테스팅 분석 시작...")
-            
-            backtest_results = self.run_backtest_analysis(
-                ml_predictions=ml_results,
-                top_k=backtest_top_k,
-                bottom_k=backtest_bottom_k,
-                cost_bps=backtest_cost_bps
-            )
-            
-            ml_results['backtest'] = backtest_results
-            
-            if backtest_results.get('success'):
-                if progress_callback: progress_callback(message="백테스팅 결과 정리 중...")
-                # ... (기존 로그 출력 부분) ...
-
-        return sanitize_for_json(ml_results)
-        
-    # ✅ run_ml_analysis 메소드 수정
-    def run_ml_analysis(
-        self,
-        k_clusters: int = 4,
-        horizon: int = 5,
-        use_gru: bool = True,
-        top_n: int = 5,
-        bottom_n: int = 5,
-        progress_callback: Optional[Callable[[str], None]] = None, # 인자 추가
-        **kwargs
-    ) -> dict:
+    # 클러스터링
+    def perform_clustering(self, n_clusters: int = 3) -> dict:
         try:
-            if self.returns is None or len(self.returns) == 0:
+            if self.returns.empty: # 데이터 없으면
                 return {}
 
-            ml = MLAnalyzer(returns=self.returns, prices=self.stock_data)
-            
-            # ML 분석기에 콜백 전달
-            ml_out = ml.run_all(
-                k_clusters=k_clusters,
-                horizon=horizon,
-                use_gru=use_gru,
-                top_n=top_n,
-                bottom_n=bottom_n,
-                progress_callback=progress_callback, # 콜백 전달
-                **kwargs
-            )
+            features = pd.DataFrame({ # 특징 데이터 생성
+                'return': self.returns.mean() * 252, # 연간 수익률
+                'volatility': self.returns.std() * np.sqrt(252), # 연간 변동성
+                'sharpe': (self.returns.mean() * 252) / (self.returns.std() * np.sqrt(252)) # 샤프비율
+            }).replace([np.inf, -np.inf], np.nan).fillna(0.0) # 무한대 제거
 
-            if not isinstance(self.ml_results, dict):
-                self.ml_results = {}
-            self.ml_results.update(ml_out)
-            return ml_out
+            scaler = StandardScaler() # 정규화 객체
+            features_scaled = scaler.fit_transform(features) # 특징 정규화
+
+            k = int(max(1, min(n_clusters, len(features)))) # 클러스터 수 제한
+            kmeans = KMeans(n_clusters=k, random_state=42, n_init='auto') # K-means 모델
+            clusters = kmeans.fit_predict(features_scaled) # 클러스터링 수행
+
+            stock_names = {s['ticker']: s['name'] for s in stock_manager.get_all_stocks()} # 종목 이름
+
+            result = {} # 결과 저장
+            for i in range(k): # 각 클러스터별로
+                cluster_tickers = features.index[clusters == i].tolist() # 해당 클러스터 종목
+                result[f'cluster_{i}'] = {
+                    'stocks': [stock_names.get(t, t) for t in cluster_tickers], # 종목 이름
+                    'avg_return': float(features.loc[cluster_tickers, 'return'].mean() * 100), # 평균 수익률
+                    'avg_volatility': float(features.loc[cluster_tickers, 'volatility'].mean() * 100), # 평균 변동성
+                    'avg_sharpe': float(features.loc[cluster_tickers, 'sharpe'].mean()), # 평균 샤프
+                    'count': int(len(cluster_tickers)) # 종목 수
+                }
+
+            self.ml_results['clustering'] = result # 결과 저장
+            return result
 
         except Exception as e:
-            print(f"run_ml_analysis error: {e}")
+            print(f"Clustering error: {e}") # 에러 
             return {}
     
     # 리스크 지표 계산
@@ -438,6 +400,7 @@ class KoreanStockCorrelationAnalysis:
         use_gru: bool = True,
         top_n: int = 5,
         bottom_n: int = 5,
+        progress_callback: Optional[Callable[[str], None]] = None,
         **kwargs
     ) -> dict:
         try:
@@ -452,6 +415,7 @@ class KoreanStockCorrelationAnalysis:
                 use_gru=use_gru,
                 top_n=top_n,
                 bottom_n=bottom_n,
+                progress_callback=progress_callback,
                 **kwargs
             )
 
@@ -471,130 +435,90 @@ class KoreanStockCorrelationAnalysis:
     def run_backtest_analysis(self, ml_predictions=None, top_k=5, bottom_k=5, cost_bps=10.0):
         """백테스팅 분석 실행"""
         if long_short_backtest is None:
-            return {
-                'success': False,
-                'message': '백테스팅 모듈을 찾을 수 없습니다',
-                'stats': {}
-            }
+            return {'success': False, 'message': '백테스팅 모듈을 찾을 수 없습니다', 'stats': {}}
         
         if ml_predictions is None:
-            if not hasattr(self, 'ml_results') or not self.ml_results:
-                return {
-                    'success': False,
-                    'message': 'ML 분석을 먼저 실행하세요',
-                    'stats': {}
-                }
             ml_predictions = self.ml_results
         
-        # 예측 데이터 추출
+        if not ml_predictions:
+            return {'success': False, 'message': 'ML 분석을 먼저 실행하세요', 'stats': {}}
+
         pred_table = None
         
-        # 1. prediction > preds_vs_real 시도
-        if 'prediction' in ml_predictions:
-            pred_data = ml_predictions['prediction']
-            if isinstance(pred_data, dict) and 'preds_vs_real' in pred_data:
-                pred_df = pred_data['preds_vs_real']
+        if 'prediction' in ml_predictions and isinstance(ml_predictions['prediction'], dict):
+            pred_data_dict = ml_predictions['prediction']
+            if 'preds_df' in pred_data_dict and pred_data_dict['preds_df'] is not None:
+                pred_table = pd.DataFrame(pred_data_dict['preds_df'])
+                if not pred_table.empty:
+                    print("예측 데이터 찾음: prediction > preds_df")
+
+        if (pred_table is None or pred_table.empty):
+            if 'prediction' in ml_predictions and isinstance(ml_predictions['prediction'], dict) and 'preds_vs_real' in ml_predictions['prediction']:
+                pred_df = ml_predictions['prediction']['preds_vs_real']
                 if pred_df is not None and hasattr(pred_df, 'reset_index'):
                     pred_table = pred_df.reset_index()
                     print(f"예측 데이터 찾음: prediction > preds_vs_real")
+            elif 'preds_df' in ml_predictions:
+                pred_table = ml_predictions['preds_df']
+                print(f"예측 데이터 찾음: preds_df")
         
-        # 2. 직접 preds_df 확인
-        if pred_table is None and 'preds_df' in ml_predictions:
-            pred_table = ml_predictions['preds_df']
-            print(f"예측 데이터 찾음: preds_df")
+        if pred_table is None or pred_table.empty:
+            print("ERROR: 예측 데이터를 찾을 수 없습니다")
+            print(f"ML 결과 키: {list(ml_predictions.keys())}")
+            return {'success': False, 'message': 'ML 예측 데이터를 찾을 수 없습니다', 'stats': {}}
+
+        if hasattr(pred_table, 'index') and hasattr(pred_table.index, 'names'):
+            if pred_table.index.names == ['date', 'ticker']:
+                pred_table = pred_table.reset_index()
         
-        # 3. DataFrame 형태 확인 및 정리
-        if pred_table is not None:
-            # MultiIndex 처리
-            if hasattr(pred_table, 'index') and hasattr(pred_table.index, 'names'):
-                if pred_table.index.names == ['date', 'ticker']:
-                    pred_table = pred_table.reset_index()
-            
-            # 컬럼명 정리
-            if 'level_0' in pred_table.columns:
-                pred_table = pred_table.rename(columns={'level_0': 'date'})
-            if 'level_1' in pred_table.columns:
-                pred_table = pred_table.rename(columns={'level_1': 'ticker'})
-            
-            # 필수 컬럼 확인
-            required = ['date', 'ticker', 'pred']
-            if all(col in pred_table.columns for col in required):
-                print(f"백테스트 시작: {len(pred_table)} 예측값")
+        if 'level_0' in pred_table.columns: pred_table = pred_table.rename(columns={'level_0': 'date'})
+        if 'level_1' in pred_table.columns: pred_table = pred_table.rename(columns={'level_1': 'ticker'})
+        
+        required = ['date', 'ticker', 'pred']
+        if all(col in pred_table.columns for col in required):
+            print(f"백테스트 시작: {len(pred_table)} 예측값")
+            try:
+                bt_result = long_short_backtest(
+                    returns=self.returns, pred_table=pred_table[required],
+                    top_k=top_k, bottom_k=bottom_k, cost_bps=cost_bps
+                )
                 
-                # 백테스트 실행
-                try:
-                    bt_result = long_short_backtest(
-                        returns=self.returns,
-                        pred_table=pred_table[required],
-                        top_k=top_k,
-                        bottom_k=bottom_k,
-                        cost_bps=cost_bps
-                    )
-                    
-                    # 결과 정리 - 안전한 타입 변환
-                    stats_dict = {}
-                    if hasattr(bt_result, 'stats') and bt_result.stats:
-                        for k, v in bt_result.stats.items():
-                            try:
-                                if isinstance(v, (np.number, np.float32, np.float64, np.int32, np.int64)):
-                                    stats_dict[k] = float(v)
-                                else:
-                                    stats_dict[k] = v
-                            except:
-                                stats_dict[k] = str(v)
-                    
-                    # summary 정리
-                    summary = {}
-                    for key, stat_key in [
-                        ('annual_return', 'AnnRet'),
-                        ('annual_volatility', 'AnnVol'),
-                        ('sharpe_ratio', 'Sharpe'),
-                        ('max_drawdown', 'MaxDD'),
-                        ('cagr', 'CAGR'),
-                        ('avg_turnover', 'Turnover')
-                    ]:
-                        val = bt_result.stats.get(stat_key, 0)
+                stats_dict = {}
+                if hasattr(bt_result, 'stats') and bt_result.stats:
+                    for k, v in bt_result.stats.items():
                         try:
-                            summary[key] = float(val) if val is not None else 0.0
+                            stats_dict[k] = float(v) if isinstance(v, (np.number, np.float32, np.float64, np.int32, np.int64)) else v
                         except:
-                            summary[key] = 0.0
-                    
-                    backtest_results = {
-                        'success': True,
-                        'stats': stats_dict,
-                        'summary': summary
-                    }
-                    
-                    # 결과 저장 및 반환
-                    self.backtest_results = sanitize_for_json(backtest_results)
-                    return self.backtest_results
-                    
-                except Exception as e:
-                    print(f"Backtest error: {str(e)}")
-                    import traceback
-                    traceback.print_exc()
-                    return {
-                        'success': False,
-                        'message': f'백테스팅 실행 중 오류: {str(e)}',
-                        'stats': {}
-                    }
+                            stats_dict[k] = str(v)
+                
+                summary = {
+                    key: float(bt_result.stats.get(stat_key, 0) or 0)
+                    for key, stat_key in [
+                        ('annual_return', 'AnnRet'), ('annual_volatility', 'AnnVol'),
+                        ('sharpe_ratio', 'Sharpe'), ('max_drawdown', 'MaxDD'),
+                        ('cagr', 'CAGR'), ('avg_turnover', 'Turnover')
+                    ]
+                }
+                
+                backtest_results = {'success': True, 'stats': stats_dict, 'summary': summary}
+                self.backtest_results = sanitize_for_json(backtest_results)
+                return self.backtest_results
+                
+            except Exception as e:
+                import traceback
+                print(f"Backtest error: {str(e)}")
+                traceback.print_exc()
+                return {'success': False, 'message': f'백테스팅 실행 중 오류: {str(e)}', 'stats': {}}
         
-        # 예측 데이터를 찾지 못한 경우
-        print("ERROR: 예측 데이터를 찾을 수 없습니다")
-        print(f"ML 결과 키: {list(ml_predictions.keys())}")
-        
-        return {
-            'success': False,
-            'message': 'ML 예측 데이터를 찾을 수 없습니다',
-            'stats': {}
-        }
+        print("ERROR: 예측 데이터의 형식이 올바르지 않습니다 (필수 컬럼 누락).")
+        return {'success': False, 'message': 'ML 예측 데이터의 형식이 올바르지 않습니다', 'stats': {}}
 
     # ML 분석과 백테스팅을 동시에 실행
     def run_ml_analysis_with_backtest(self, k_clusters=4, horizon=5, use_gru=True,
                                       top_n=5, bottom_n=5, run_backtest=True,
                                       backtest_top_k=5, backtest_bottom_k=5, 
                                       backtest_cost_bps=10.0, 
-                                      progress_callback: Optional[Callable] = None, 
+                                      progress_callback: Optional[Callable] = None,
                                       **kwargs):
         ml_results = self.run_ml_analysis( # ML 분석 실행
             k_clusters=k_clusters,
@@ -607,7 +531,7 @@ class KoreanStockCorrelationAnalysis:
         )
         
         if run_backtest and ml_results: # 백테스팅 실행 조건
-            print("\n백테스팅 분석 시작")
+            if progress_callback: progress_callback(message="백테스팅 분석 시작...")
             
             backtest_results = self.run_backtest_analysis( # 백테스팅 실행
                 ml_predictions=ml_results,
@@ -619,6 +543,7 @@ class KoreanStockCorrelationAnalysis:
             ml_results['backtest'] = backtest_results # ML 결과에 백테스팅 추가
             
             if backtest_results.get('success'): # 백테스팅 성공한다면
+                if progress_callback: progress_callback(message="백테스팅 결과 정리 중...")
                 print("백테스팅 결과")
                 summary = backtest_results.get('summary', {})
                 print(f"연간 수익률: {summary.get('annual_return', 0):.2f}%")
