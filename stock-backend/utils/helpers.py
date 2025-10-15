@@ -140,7 +140,7 @@ def setup_korean_font():
 
 
 def fig_to_base64(fig, **kwargs):
-    buf = BytesIO()
+    buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=150, **kwargs)
     buf.seek(0)
     return base64.b64encode(buf.getvalue()).decode()
