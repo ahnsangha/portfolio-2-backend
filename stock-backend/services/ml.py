@@ -6,7 +6,7 @@
 
 from __future__ import annotations # 타입 힌트 호환성
 from dataclasses import dataclass # 데이터 클래스 정의용
-from typing import Dict, Any, Optional, List, Tuple # 타입 힌트용
+from typing import Dict, Any, Optional, List, Tuple, Callable # 타입 힌트용
 import logging # 로깅 모듈
 import numpy as np # 수치 계산
 import pandas as pd # 데이터프레임
@@ -820,181 +820,71 @@ class MLAnalyzer:
         return summary
 
 # 전체 파이프라인
-    def run_all(self,
-                k_clusters: int = 4, # 클러스터 개수
-                horizon: int = 5, # 예측 기간
-                use_gru: bool = True, # GRU 사용 여부
-                top_n: int = 5, # 상위 종목 개수
-                bottom_n: int = 5, # 하위 종목 개수
-                weight_scheme: str = "hrp", # 가중치 방식
-                long_only: bool = False, # 롱온리 여부
-                seq_len: Optional[int] = None, # 시퀀스 길이
-                epochs: Optional[int] = None, # 에폭 수
-                hidden_size: Optional[int] = None, # 히든 사이즈
-                dropout: Optional[float] = None, # 드롭아웃
-                hrp_max_weight: Optional[float] = None, # HRP 최대 가중치
-                hrp_min_weight: float = 0.0, # HRP 최소 가중치
-                hrp_blend_to_equal: Optional[float] = None, # HRP 균등 블렌딩
-                hrp_resamples: int = 0, # HRP 리샘플링
-                long_tau: Optional[float] = None, # 롱 온도
-                short_tau: Optional[float] = None, # 숏 온도
-                meta_tune: bool = False, # 메타 튜닝 여부
-                meta_max_trials: int = 20, # 메타 튜닝 최대 시도
-                meta_random_state: int = 42, # 메타 튜닝 랜덤 상태
-                meta_quick: bool = True, # 메타 튜닝 빠른 모드
-                **gru_kwargs) -> Dict[str, Any]: # GRU 추가 인자들
-        # 시작 메시지
-        self._push_msg(f"ML Analysis started - {self.returns.shape[1]} stocks, {len(self.returns)} days")
+    def run_all(self, k_clusters=4, horizon=5, use_gru=True, top_n=5, bottom_n=5, progress_callback: Optional[Callable[[str], None]] = None, **kwargs):
+        """
+        모든 ML 분석 파이프라인을 실행합니다.
+        """
+        results = {}
+        ui_messages = []
         
-        meta_result: Optional[Dict[str, Any]] = None # 메타 튜닝 결과 초기화
-        if meta_tune: # 메타 튜닝 사용하면
-            self._push_msg("Running meta-tuning for optimal parameters...") # 메시지 추가
-            meta_result = self.run_meta_tune( # 메타 튜닝 실행
-                use_gru=use_gru, max_trials=meta_max_trials,
-                random_state=meta_random_state, quick=meta_quick
-            )
-            if meta_result and meta_result.get("best"): # 최고 결과가 있으면
-                b = meta_result["best"] # 최고 결과
-                horizon = int(b["horizon"]) # 기간 업데이트
-                weight_scheme = str(b["weight_scheme"]) # 가중치 방식 업데이트
-                long_only = bool(b["long_only"]) # 롱온리 업데이트
-                hrp_max_weight = b["hrp_max_weight"] # HRP 최대 가중치 업데이트
-                hrp_blend_to_equal = b["hrp_blend_to_equal"] # HRP 블렌딩 업데이트
-                long_tau = b["tau"]; short_tau = b["tau"] # 온도 업데이트
-                seq_len = b["seq_len"]; epochs = b["epochs"] # 시퀀스/에폭 업데이트
-                hidden_size = b["hidden_size"]; dropout = b["dropout"] # 히든/드롭아웃 업데이트
-                self._push_msg(f"Meta-tune best: IC={b.get('ic', 0):.3f}, Hit={b.get('hit_rate', 0):.3f}") # 메시지 추가
+        # 데이터 유효성 검사
+        if self.returns.shape[0] < 20 or self.returns.shape[1] < 2:
+            ui_messages.append("데이터가 부족하여 ML 분석을 건너<binary data, 2 bytes><binary data, 2 bytes><binary data, 2 bytes>니다.")
+            results['ui_messages'] = ui_messages
+            return results
 
-        tuned = self._auto_tune( # 자동 튜닝
-            horizon=horizon,
-            seq_len=seq_len, epochs=epochs, hidden_size=hidden_size, dropout=dropout,
-            hrp_max_weight=hrp_max_weight, hrp_blend_to_equal=hrp_blend_to_equal,
-            long_tau=long_tau, short_tau=short_tau
-        )
-        seq_len     = tuned["seq_len"] if seq_len is None else seq_len # 시퀀스 길이 설정
-        epochs      = tuned["epochs"]  if epochs  is None else epochs # 에폭 설정
-        hidden_size = tuned["hidden_size"] if hidden_size is None else hidden_size # 히든 사이즈 설정
-        dropout     = tuned["dropout"] if dropout is None else dropout # 드롭아웃 설정
-        if hrp_blend_to_equal is None: hrp_blend_to_equal = tuned["hrp_blend_to_equal"] # HRP 블렌딩 설정
-        if long_tau is None: long_tau = tuned["long_tau"] # 롱 온도 설정
-        if short_tau is None: short_tau = tuned["short_tau"] # 숏 온도 설정
+        try:
+            # 1. PCA
+            if progress_callback: progress_callback("PCA 차원 축소 분석 중...")
+            pca_result = self.run_pca()
+            results['pca'] = {'loadings': pca_result[0], 'explained_variance': pca_result[1]}
+            ui_messages.append(f"PCA 분석 완료: {len(pca_result[0])}개의 주요 요인 발견")
 
-        # 각 단계별 진행 상황 메시지
-        self._push_msg("Running PCA & clustering analysis...") # PCA 클러스터링 메시지
-        pca_res = self.pca_2d() # PCA 실행
-        clus_res = self.kmeans_clusters(pca_res, k_clusters=min(k_clusters, self.returns.shape[1])) # 클러스터링 실행
-        
-        self._push_msg(f"Computing {weight_scheme.upper()} portfolio weights...") # 가중치 계산 메시지
-        hrp_res  = self.hrp_weights( # HRP 가중치 계산
-            scheme=weight_scheme,
-            max_weight=hrp_max_weight, min_weight=hrp_min_weight,
-            blend_to_equal=hrp_blend_to_equal, resamples=hrp_resamples
-        )
-        
-        model_name = "GRU" if use_gru else "RandomForest" # 모델 이름
-        self._push_msg(f"Training {model_name} model (horizon={horizon}, epochs={epochs})...") # 모델 훈련 메시지
-        pred_res = self.predict_next( # 예측 실행
-            horizon=horizon, use_gru=use_gru,
-            seq_len=seq_len, epochs=epochs, hidden_size=hidden_size, dropout=dropout,
-            **gru_kwargs
-        )
-        
-        # 결과 메시지 추가
-        ic_val = float(pred_res.ic) if np.isfinite(pred_res.ic) else 0.0 # IC 값
-        hit_val = float(pred_res.hit_rate) if np.isfinite(pred_res.hit_rate) else 0.0 # 적중률 값
-        r2_val  = float(pred_res.r2) if (pred_res.r2 is not None and np.isfinite(pred_res.r2)) else 0.0 # R2 값
-        self._push_msg(f"Results: IC={ic_val:.3f}, Hit={hit_val:.3f}, R²={r2_val:.3f}") # 결과 메시지
+            # 2. Clustering
+            if progress_callback: progress_callback("K-Means 클러스터링 수행 중...")
+            clusters = self.run_clustering(n_clusters=k_clusters)
+            results['clusters'] = clusters
+            ui_messages.append(f"클러스터링 완료: {k_clusters}개의 그룹으로 종목 분류")
 
-        # 투자 등급 평가
-        if ic_val > 0.10: # IC가 0.10 초과
-            self._push_msg("Investment Grade: EXCELLENT - Strong predictive power") # 우수 등급
-        elif ic_val > 0.05: # IC가 0.05 초과
-            self._push_msg("Investment Grade: GOOD - Acceptable for investment") # 양호 등급
-        elif ic_val > 0.02: # IC가 0.02 초과
-            self._push_msg("Investment Grade: FAIR - Borderline performance") # 보통 등급
-        else: # 그 외
-            self._push_msg("Investment Grade: POOR - Not recommended for investment") # 불량 등급
+            # 3. HRP
+            if progress_callback: progress_callback("HRP 포트폴리오 최적화 중...")
+            hrp_weights, hrp_dendrogram = self.run_hrp()
+            results['hrp'] = {'weights': hrp_weights, 'dendrogram': hrp_dendrogram}
+            
+            # 4. Prediction
+            if progress_callback: progress_callback("ML 모델 예측 생성 중...")
+            pred_results = self.run_prediction(horizon=horizon, use_gru=use_gru, **kwargs)
+            results['prediction'] = pred_results
+            
+            # 예측 결과에 대한 UI 메시지 추가
+            if pred_results and pred_results.get('ic', 0) > 0.02:
+                msg = f"ML 예측 성공: IC {pred_results.get('ic', 0):.3f}, 적중률 {pred_results.get('hit_rate', 0):.1%}"
+                ui_messages.append(msg)
+            else:
+                ui_messages.append("ML 예측 모델의 신뢰도가 낮습니다.")
 
-        picks = self._build_picks( # 종목 선택
-            pred_res, hrp_res.weights,
-            top_n=top_n, bottom_n=bottom_n,
-            long_tau=long_tau, short_tau=short_tau,
-            long_only=long_only
-        )
+            # 5. Picks
+            if progress_callback: progress_callback("상위/하위 종목 선정 중...")
+            picks = self.select_picks(top_n=top_n, bottom_n=bottom_n, prediction_results=pred_results)
+            results['picks'] = picks
+            
+            # 선택된 종목에 대한 UI 메시지 추가
+            if picks and picks.get('top'):
+                top_stock_name = picks['top'][0]['name']
+                ui_messages.append(f"최선호주로 '{top_stock_name}'가 선정되었습니다.")
 
-        explained_array = pca_res.explained_var if pca_res.explained_var is not None else pca_res.explained_variance_ratio_ # 설명된 분산
-        explained_list = np.asarray(explained_array).tolist() # 리스트로 변환
+            # 6. Today Weights (optional)
+            if progress_callback: progress_callback("최신 투자 비중 계산 중...")
+            today_weights = self.get_today_weights(hrp_weights, picks)
+            results['today_weights'] = today_weights
 
-        # NumPy 타입을 파이썬 기본 타입으로 변환
-        # PCA 좌표 변환
-        pca_coords_records = pca_res.components.reset_index().rename(columns={"index": "ticker"}).to_dict(orient="records")
-        cleaned_pca_coords = [
-            {k: v if isinstance(v, str) else float(v) for k, v in row.items()}
-            for row in pca_coords_records
-        ]
+        except Exception as e:
+            import traceback
+            print(f"ML 'run_all' failed: {e}\n{traceback.format_exc()}")
+            ui_messages.append(f"ML 분석 중 오류 발생: {str(e)[:100]}")
 
-        # 클러스터 중심점 변환
-        centers_records = clus_res.centers.to_dict(orient="records")
-        cleaned_centers = [
-            {k: float(v) for k, v in row.items()}
-            for row in centers_records
-        ]
-        
-        # HRP 가중치 변환
-        cleaned_hrp_weights = {
-            k: float(v) for k, v in hrp_res.weights.sort_values(ascending=False).to_dict().items()
-        }
-
-        out: Dict[str, Any] = {
-            "meta": {
-                "universe_size": int(self.returns.shape[1]),
-                "n_days": int(len(self.returns)),
-                "tuned": {
-                    "seq_len": seq_len, "epochs": epochs, "hidden_size": hidden_size, "dropout": dropout,
-                    "hrp_max_weight": hrp_max_weight, "hrp_blend_to_equal": hrp_blend_to_equal,
-                    "long_tau": long_tau, "short_tau": short_tau,
-                    "weight_scheme": weight_scheme, "long_only": long_only,
-                    "horizon": horizon
-                },
-                "meta_tune": meta_result or {}
-            },
-            "pca": {
-                "coords": cleaned_pca_coords,
-                "explained_var": [float(v) for v in explained_list]
-            },
-            "clusters": {
-                "labels": {k: int(v) for k, v in self._safe_dict(clus_res.labels).items()},
-                "centers": cleaned_centers
-            },
-            "hrp": {
-                "weights": cleaned_hrp_weights,
-                "order": hrp_res.order
-            },
-            "prediction": {
-                "horizon": int(pred_res.horizon),
-                "ic": float(pred_res.ic) if np.isfinite(pred_res.ic) else 0.0,
-                "hit_rate": float(pred_res.hit_rate) if np.isfinite(pred_res.hit_rate) else 0.0,
-                "r2": float(pred_res.r2) if pred_res.r2 is not None and np.isfinite(pred_res.r2) else None,
-                "ic_by_date": {pd.Timestamp(k).strftime("%Y-%m-%d"): float(v) 
-                    for k, v in pred_res.ic_by_date.items()},
-                # NumPy 타입을 Python float으로 변환하여 JSON 직렬화 해결
-                "preds_vs_real": (
-                    [
-                        {
-                            k: (v.isoformat() if isinstance(v, pd.Timestamp) else float(v) if isinstance(v, (np.number, float, int)) else v)
-                            for k, v in record.items()
-                        }
-                        for record in pred_res.preds_vs_real.reset_index().to_dict('records')
-                    ]
-                    if pred_res.preds_vs_real is not None else None
-                )
-            },
-            "picks": picks,
-            "today_weights": picks.get("today_weights", {}),
-            "ui_messages": list(getattr(self, "ui_messages", [])),
-            "preds_df": pred_res.preds_vs_real.reset_index() if pred_res and hasattr(pred_res, 'preds_vs_real') else None
-        }
-        return out
+        results['ui_messages'] = ui_messages
+        return results
 
     @staticmethod
     def _safe_dict(s: pd.Series) -> Dict[str, Any]: # 안전하게 딕셔너리 변환

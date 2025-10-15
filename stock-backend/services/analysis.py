@@ -270,82 +270,123 @@ class KoreanStockCorrelationAnalysis:
         return False, collection_status # 실패 반환
 
     # 상관관계 분석
-    def analyze_correlation(self, window: int = 60) -> None:
-        if len(self.returns) < window: # 데이터가 윈도우보다 짧으면
+    def analyze_correlation(self, window: int = 60, progress_callback: Optional[Callable] = None) -> None:
+        if len(self.returns) < window:
             print(f"Warning: Not enough data for window size {window}. Using {len(self.returns)} days.")
-            window = max(20, len(self.returns) // 3) # 윈도우 크기 조정
+            window = max(20, len(self.returns) // 3)
 
-        self.static_corr = self.returns.corr() # 전체 기간 상관관계
-        self.rolling_corr_matrix = self.returns.rolling(window).corr() # 롤링 상관관계
-        self.avg_corr = self.rolling_corr_matrix.groupby(level=0).apply( # 평균 상관관계
-            lambda x: x.values[np.triu_indices_from(x.values, k=1)].mean() # 상삼각 행렬 평균
+        if progress_callback: progress_callback(message="정적 상관관계 계산 중...")
+        self.static_corr = self.returns.corr()
+        
+        if progress_callback: progress_callback(message="롤링 상관관계 계산 중...")
+        self.rolling_corr_matrix = self.returns.rolling(window).corr()
+        
+        if progress_callback: progress_callback(message="평균 상관관계 및 변동성 계산 중...")
+        self.avg_corr = self.rolling_corr_matrix.groupby(level=0).apply(
+            lambda x: x.values[np.triu_indices_from(x.values, k=1)].mean()
         )
-        self.market_volatility = self.returns.mean(axis=1).rolling(20).std() * np.sqrt(252) # 시장 변동성
+        self.market_volatility = self.returns.mean(axis=1).rolling(20).std() * np.sqrt(252)
 
-    def calculate_portfolio_metrics(self) -> None:
-        # 포트폴리오 지표 계산
-        if self.returns.empty: # 데이터 없으면
-            self.equal_weight_returns = pd.Series(dtype=float) # 빈 시리즈
+    # ✅ calculate_portfolio_metrics 메소드 수정
+    def calculate_portfolio_metrics(self, progress_callback: Optional[Callable] = None) -> None:
+        if self.returns.empty:
+            self.equal_weight_returns = pd.Series(dtype=float)
             self.min_var_returns = pd.Series(dtype=float)
             self.max_sharpe_returns = pd.Series(dtype=float)
             return
 
-        self.equal_weight_returns = self.returns.mean(axis=1) # 동일가중 수익률
+        if progress_callback: progress_callback(message="포트폴리오 가중치 및 수익률 계산 중...")
+        self.equal_weight_returns = self.returns.mean(axis=1)
 
-        cov_matrix = self.returns.cov() # 공분산 행렬
-        inv_cov = np.linalg.pinv(cov_matrix.values) # 의사역행렬
-        ones = np.ones(len(cov_matrix)) # 1 벡터
-        weights = inv_cov @ ones / (ones @ inv_cov @ ones) # 최소분산 가중치
-        self.min_var_returns = (self.returns @ weights) # 최소분산 수익률
-        self.min_var_weights = dict(zip(self.returns.columns, weights)) # 가중치 저장
+        cov_matrix = self.returns.cov()
+        inv_cov = np.linalg.pinv(cov_matrix.values)
+        ones = np.ones(len(cov_matrix))
+        weights = inv_cov @ ones / (ones @ inv_cov @ ones)
+        self.min_var_returns = (self.returns @ weights)
+        self.min_var_weights = dict(zip(self.returns.columns, weights))
 
-        inv_vol = 1 / self.returns.std() # 변동성의 역수
-        sharpe_weights = inv_vol / inv_vol.sum() # 샤프 가중치
-        self.max_sharpe_returns = (self.returns * sharpe_weights).sum(axis=1) # 최대샤프 수익률
-        self.max_sharpe_weights = dict(zip(self.returns.columns, sharpe_weights))# 가중치 저장
+        inv_vol = 1 / self.returns.std()
+        sharpe_weights = inv_vol / inv_vol.sum()
+        self.max_sharpe_returns = (self.returns * sharpe_weights).sum(axis=1)
+        self.max_sharpe_weights = dict(zip(self.returns.columns, sharpe_weights))
 
-        if hasattr(self, 'avg_corr') and len(self.avg_corr) > 0: # 평균 상관관계 있으면
-            dynamic_weights = 1 - self.avg_corr # 역상관 가중치
-            dynamic_weights = dynamic_weights.clip(0.3, 1.0) # 범위 제한
-            self.dynamic_returns = self.equal_weight_returns[dynamic_weights.index] * dynamic_weights # 동적 수익률
+        if hasattr(self, 'avg_corr') and len(self.avg_corr) > 0:
+            dynamic_weights = 1 - self.avg_corr
+            dynamic_weights = dynamic_weights.clip(0.3, 1.0)
+            self.dynamic_returns = self.equal_weight_returns[dynamic_weights.index] * dynamic_weights
 
-    # 클러스터링
-    def perform_clustering(self, n_clusters: int = 3) -> dict:
+    # ✅ run_ml_analysis_with_backtest 메소드 수정
+    def run_ml_analysis_with_backtest(self, k_clusters=4, horizon=5, use_gru=True,
+                                      top_n=5, bottom_n=5, run_backtest=True,
+                                      backtest_top_k=5, backtest_bottom_k=5, 
+                                      backtest_cost_bps=10.0, 
+                                      progress_callback: Optional[Callable] = None, # 인자 추가
+                                      **kwargs):
+        
+        # ML 분석 실행 시 콜백 전달
+        ml_results = self.run_ml_analysis(
+            k_clusters=k_clusters,
+            horizon=horizon,
+            use_gru=use_gru,
+            top_n=top_n,
+            bottom_n=bottom_n,
+            progress_callback=progress_callback, # 콜백 전달
+            **kwargs
+        )
+        
+        if run_backtest and ml_results:
+            if progress_callback: progress_callback(message="백테스팅 분석 시작...")
+            
+            backtest_results = self.run_backtest_analysis(
+                ml_predictions=ml_results,
+                top_k=backtest_top_k,
+                bottom_k=backtest_bottom_k,
+                cost_bps=backtest_cost_bps
+            )
+            
+            ml_results['backtest'] = backtest_results
+            
+            if backtest_results.get('success'):
+                if progress_callback: progress_callback(message="백테스팅 결과 정리 중...")
+                # ... (기존 로그 출력 부분) ...
+
+        return sanitize_for_json(ml_results)
+        
+    # ✅ run_ml_analysis 메소드 수정
+    def run_ml_analysis(
+        self,
+        k_clusters: int = 4,
+        horizon: int = 5,
+        use_gru: bool = True,
+        top_n: int = 5,
+        bottom_n: int = 5,
+        progress_callback: Optional[Callable[[str], None]] = None, # 인자 추가
+        **kwargs
+    ) -> dict:
         try:
-            if self.returns.empty: # 데이터 없으면
+            if self.returns is None or len(self.returns) == 0:
                 return {}
 
-            features = pd.DataFrame({ # 특징 데이터 생성
-                'return': self.returns.mean() * 252, # 연간 수익률
-                'volatility': self.returns.std() * np.sqrt(252), # 연간 변동성
-                'sharpe': (self.returns.mean() * 252) / (self.returns.std() * np.sqrt(252)) # 샤프비율
-            }).replace([np.inf, -np.inf], np.nan).fillna(0.0) # 무한대 제거
+            ml = MLAnalyzer(returns=self.returns, prices=self.stock_data)
+            
+            # ML 분석기에 콜백 전달
+            ml_out = ml.run_all(
+                k_clusters=k_clusters,
+                horizon=horizon,
+                use_gru=use_gru,
+                top_n=top_n,
+                bottom_n=bottom_n,
+                progress_callback=progress_callback, # 콜백 전달
+                **kwargs
+            )
 
-            scaler = StandardScaler() # 정규화 객체
-            features_scaled = scaler.fit_transform(features) # 특징 정규화
-
-            k = int(max(1, min(n_clusters, len(features)))) # 클러스터 수 제한
-            kmeans = KMeans(n_clusters=k, random_state=42, n_init='auto') # K-means 모델
-            clusters = kmeans.fit_predict(features_scaled) # 클러스터링 수행
-
-            stock_names = {s['ticker']: s['name'] for s in stock_manager.get_all_stocks()} # 종목 이름
-
-            result = {} # 결과 저장
-            for i in range(k): # 각 클러스터별로
-                cluster_tickers = features.index[clusters == i].tolist() # 해당 클러스터 종목
-                result[f'cluster_{i}'] = {
-                    'stocks': [stock_names.get(t, t) for t in cluster_tickers], # 종목 이름
-                    'avg_return': float(features.loc[cluster_tickers, 'return'].mean() * 100), # 평균 수익률
-                    'avg_volatility': float(features.loc[cluster_tickers, 'volatility'].mean() * 100), # 평균 변동성
-                    'avg_sharpe': float(features.loc[cluster_tickers, 'sharpe'].mean()), # 평균 샤프
-                    'count': int(len(cluster_tickers)) # 종목 수
-                }
-
-            self.ml_results['clustering'] = result # 결과 저장
-            return result
+            if not isinstance(self.ml_results, dict):
+                self.ml_results = {}
+            self.ml_results.update(ml_out)
+            return ml_out
 
         except Exception as e:
-            print(f"Clustering error: {e}") # 에러 
+            print(f"run_ml_analysis error: {e}")
             return {}
     
     # 리스크 지표 계산

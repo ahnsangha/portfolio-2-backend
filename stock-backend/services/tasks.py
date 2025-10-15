@@ -1,4 +1,4 @@
-# 비동기 작업 
+# services/tasks.py
 
 import asyncio
 import traceback
@@ -8,160 +8,91 @@ from services.analysis import KoreanStockCorrelationAnalysis
 from services.data import stock_manager
 from models import AnalysisRequest
 import numpy as np
-import gc # 💡 [최적화 4] 가비지 컬렉션 모듈 import
+import gc
 
 # 백그라운드 분석 작업
 async def run_analysis_task(task_id: str, request: AnalysisRequest):
     try:
-        analysis_tasks[task_id]["status"] = "running"
-        analysis_tasks[task_id]["message"] = "데이터 수집 중..."
-        analysis_tasks[task_id]["progress"] = 0.1
+        # ✅ 진행률 관리 함수 정의
+        def update_progress(progress, message, stock_name=None):
+            task = analysis_tasks[task_id]
+            task["progress"] = round(progress, 3)
+            task["message"] = message
+            if stock_name:
+                task["current_stock"] = stock_name
+            elif "current_stock" in task:
+                del task["current_stock"]
+            print(f"[Progress {int(progress*100)}%] {message} {stock_name or ''}")
+
+        update_progress(0.05, "분석 대기 중...")
         
         analyzer = KoreanStockCorrelationAnalysis()
-        
         loop = asyncio.get_event_loop()
         
-        # 데이터 수집 진행 상황을 업데이트하는 콜백 함수 정의
-        def progress_callback(current, total, stock_name):
-            progress = 0.1 + (current / total) * 0.2 # 데이터 수집 진행률 (10% ~ 30%)
-            analysis_tasks[task_id]["progress"] = round(progress, 2)
-            analysis_tasks[task_id]["message"] = f"데이터 수집 중... ({current}/{total})"
-            analysis_tasks[task_id]["current_stock"] = stock_name
+        # 1. 데이터 수집 (5% ~ 35%)
+        def collection_callback(current, total, stock_name):
+            progress = 0.05 + (current / total) * 0.30
+            update_progress(progress, f"데이터 수집 중... ({current}/{total})", stock_name)
         
-        # 1. 데이터 수집 (콜백 함수 전달)
         success, collection_status = await loop.run_in_executor(
-            executor,
-            analyzer.collect_data,
-            request.start_date,
-            request.end_date,
-            request.tickers,
-            progress_callback  # 콜백 함수 전달
+            executor, analyzer.collect_data, request.start_date, request.end_date, request.tickers, collection_callback
         )
         
-        if not success:
+        if not success or not any(s.get('status') == 'success' for s in collection_status):
             analysis_tasks[task_id]["status"] = "failed"
-            analysis_tasks[task_id]["message"] = "데이터 수집 실패 - 모든 종목에서 데이터를 가져올 수 없습니다"
+            analysis_tasks[task_id]["message"] = "데이터 수집에 실패했습니다. 유효한 종목이 없습니다."
             analysis_tasks[task_id]["collection_status"] = collection_status
             return
         
         successful_stocks = [s for s in collection_status if s.get('status') == 'success']
-        if len(successful_stocks) == 0:
-            analysis_tasks[task_id]["status"] = "failed"
-            analysis_tasks[task_id]["message"] = "데이터 수집 실패 - 유효한 데이터가 없습니다"
-            analysis_tasks[task_id]["collection_status"] = collection_status
-            return
         
-         # 2. 상관관계 분석
-        analysis_tasks[task_id]["progress"] = 0.3
-        analysis_tasks[task_id]["message"] = f"상관관계 분석 중... ({len(successful_stocks)}개 종목)"
-        analysis_tasks[task_id].pop("current_stock", None) # current_stock 필드 제거
-        
-        await loop.run_in_executor(executor, analyzer.analyze_correlation, request.window)
-        
-        # 3. 포트폴리오 지표 계산
-        analysis_tasks[task_id]["progress"] = 0.5
-        analysis_tasks[task_id]["message"] = "포트폴리오 지표 계산 중..."
-        
-        await loop.run_in_executor(executor, analyzer.calculate_portfolio_metrics)
-        
-        # 4. ML 분석 및 백테스팅 (통합 실행)
-        analysis_tasks[task_id]["progress"] = 0.7
-        analysis_tasks[task_id]["message"] = "ML 분석 및 백테스팅 중..."
-        
-        # ML 분석과 백테스팅을 함께 실행
-        ml_results = await loop.run_in_executor(
-            executor,
-            analyzer.run_ml_analysis_with_backtest,  # 통합 메서드 사용
-            4,      # k_clusters
-            5,      # horizon
-            True,   # use_gru
-            5,      # top_n
-            5,      # bottom_n
-            True,   # run_backtest
-            5,      # backtest_top_k
-            5,      # backtest_bottom_k
-            10.0    # backtest_cost_bps
+        # 2. 상관관계 및 포트폴리오 분석 (35% ~ 50%)
+        def basic_analysis_callback(progress_base=0.35, progress_range=0.15, message=""):
+            # 이 콜백은 각 단계별로 진행률을 조금씩 올립니다.
+            current_progress = analysis_tasks[task_id]["progress"]
+            new_progress = min(progress_base + progress_range, current_progress + 0.03)
+            update_progress(new_progress, message)
+
+        update_progress(0.35, f"상관관계 분석 중... ({len(successful_stocks)}개 종목)")
+        await loop.run_in_executor(
+            executor, analyzer.analyze_correlation, request.window, 
+            lambda message: basic_analysis_callback(message=message)
         )
         
-        # 결과 출력
-        if ml_results:
-            # ML 결과 출력
-            if 'prediction' in ml_results:
-                pred = ml_results['prediction']
-                ic_val = pred.get('ic', 0)
-                hit_val = pred.get('hit_rate', 0)
-                print(f"{'ML 분석 완료'}")
-                print(f"IC Score: {ic_val:.3f}")
-                print(f"Hit Rate: {hit_val:.3f}")
-                print(f"R²: {pred.get('r2', 'N/A')}")
-                
-                # 투자 등급 판단
-                if ic_val > 0.10:
-                    grade = "EXCELLENT - 강한 예측력"
-                elif ic_val > 0.05:
-                    grade = "GOOD - 투자 가능"
-                elif ic_val > 0.02:
-                    grade = "FAIR - 경계선"
-                else:
-                    grade = "POOR - 투자 비권장"
-                print(f"투자 등급: {grade}")
-            
-            # 백테스팅 결과 출력
-            if 'backtest' in ml_results and ml_results['backtest'].get('success'):
-                bt = ml_results['backtest']['summary']
-                print(f"{'백테스팅 결과'}")
-                print(f"연간 수익률: {bt['annual_return']:>10.2f}%")
-                print(f"연간 변동성: {bt['annual_volatility']:>10.2f}%")
-                print(f"샤프 비율: {bt['sharpe_ratio']:>10.2f}")
-                print(f"최대 낙폭: {bt['max_drawdown']:>10.2f}%")
-                print(f"CAGR: {bt['cagr']:>10.2f}%")
-                print(f"평균 회전율: {bt['avg_turnover']:>10.2%}")
-                
-                # 종합 판정
-                ic_val = ml_results.get('prediction', {}).get('ic', 0)
-                sharpe = bt['sharpe_ratio']
-                
-                print(f"{'종합 투자 판정'}")
-                
-                if ic_val > 0.05 and sharpe > 0.5:
-                    verdict = "투자 권장"
-                    detail = "예측력과 수익성 모두 양호"
-                elif ic_val > 0.02 and sharpe > 0.3:
-                    verdict = "신중한 투자"
-                    detail = "제한적 수익 가능성"
-                else:
-                    verdict = "투자 비권장"
-                    detail = "리스크 대비 수익 미흡"
-                
-                print(f"{verdict}")
-                print(f"{detail}")
-            
-            # UI 메시지 출력
-            if 'ui_messages' in ml_results and ml_results['ui_messages']:
-                print("\n분석 메시지:")
-                for msg in ml_results['ui_messages'][-3:]:
-                    print(f"  - {msg}")
-                print()
+        update_progress(0.45, "포트폴리오 지표 계산 중...")
+        await loop.run_in_executor(
+            executor, analyzer.calculate_portfolio_metrics,
+            lambda message: basic_analysis_callback(message=message)
+        )
+
+        # 3. ML 분석 및 백테스팅 (50% ~ 95%)
+        def ml_callback(message):
+            # ML 분석은 50%에서 95%까지 차지하도록 설정
+            current_progress = analysis_tasks[task_id]["progress"]
+            # 각 단계마다 약 5~7%씩 진행률을 올립니다.
+            new_progress = min(0.95, current_progress + 0.07)
+            update_progress(new_progress, message)
         
-        # 5. 결과 생성
-        analysis_tasks[task_id]["progress"] = 0.9
-        analysis_tasks[task_id]["message"] = "결과 생성 중..."
+        update_progress(0.50, "ML 분석 및 백테스팅 초기화...")
+        ml_results = await loop.run_in_executor(
+            executor,
+            analyzer.run_ml_analysis_with_backtest,
+            4, 5, True, 5, 5, True, 5, 5, 10.0,
+            ml_callback  # ML 콜백 함수 전달
+        )
         
+        # 4. 결과 생성 (95% ~ 100%)
+        update_progress(0.95, "최종 결과 생성 중...")
         performance_summary = analyzer.get_performance_summary()
         
         all_stocks = stock_manager.get_all_stocks()
         stock_name_map = {stock['ticker']: stock['name'] for stock in all_stocks}
         
-        # 상관행렬을 이름 기준으로 변환
-        correlation_matrix_with_names = {}
-        for ticker1, correlations in analyzer.static_corr.to_dict().items():
-            stock_name1 = stock_name_map.get(ticker1, ticker1)
-            correlation_matrix_with_names[stock_name1] = {}
-            for ticker2, corr_value in correlations.items():
-                stock_name2 = stock_name_map.get(ticker2, ticker2)
-                correlation_matrix_with_names[stock_name1][stock_name2] = corr_value
+        correlation_matrix_with_names = {
+            stock_name_map.get(t1, t1): {stock_name_map.get(t2, t2): v for t2, v in corrs.items()}
+            for t1, corrs in analyzer.static_corr.to_dict().items()
+        }
         
-        # 상관 통계 계산
         corr_values = analyzer.static_corr.values[np.triu_indices_from(analyzer.static_corr.values, k=1)]
         
         basic_stats = {
@@ -171,36 +102,27 @@ async def run_analysis_task(task_id: str, request: AnalysisRequest):
                 "trading_days": len(analyzer.stock_data)
             },
             "correlation_stats": {
-                "average": float(corr_values.mean()),
-                "median": float(np.median(corr_values)),
-                "std": float(corr_values.std()),
-                "min": float(corr_values.min()),
-                "max": float(corr_values.max())
+                "average": float(corr_values.mean()), "median": float(np.median(corr_values)),
+                "std": float(corr_values.std()), "min": float(corr_values.min()), "max": float(corr_values.max())
             },
             "stocks_analyzed": len(analyzer.stock_data.columns),
             "collection_status": collection_status
         }
         
-        portfolio_weights = {
-            "min_variance": analyzer.min_var_weights,
-            "max_sharpe": analyzer.max_sharpe_weights
-        }
+        portfolio_weights = {"min_variance": analyzer.min_var_weights, "max_sharpe": analyzer.max_sharpe_weights}
         
-        # 최종 결과 저장 (백테스팅 포함)
         analysis_tasks[task_id]["result"] = {
             "basic_stats": basic_stats,
             "performance_summary": performance_summary,
             "correlation_matrix": correlation_matrix_with_names,
             "portfolio_weights": portfolio_weights,
             "analyzer": analyzer,
-            "ml_analysis": ml_results if ml_results else {},
-            "backtest_results": ml_results.get('backtest', {}) if ml_results else {}  # 백테스팅 결과 추가
+            "ml_analysis": ml_results or {},
+            "backtest_results": ml_results.get('backtest', {}) if ml_results else {}
         }
         
-        # 분석 완료 후 최종 결과 저장
+        update_progress(1.0, f"분석 완료 ({len(successful_stocks)}개 종목)")
         analysis_tasks[task_id]["status"] = "completed"
-        analysis_tasks[task_id]["message"] = f"분석 완료 ({len(successful_stocks)}개 종목)"
-        analysis_tasks[task_id]["progress"] = 1.0
         
     except Exception as e:
         analysis_tasks[task_id]["status"] = "failed"
@@ -210,7 +132,6 @@ async def run_analysis_task(task_id: str, request: AnalysisRequest):
         traceback.print_exc()
     
     finally:
-        # ✅ 2. 작업이 끝나면 메모리 정리를 강제로 실행
         if 'analyzer' in locals():
-            del analyzer  # analyzer 객체 삭제
+            del analyzer
         gc.collect()
